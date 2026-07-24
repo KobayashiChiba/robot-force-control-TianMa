@@ -20,3 +20,9 @@
 ## 相关链接
 
 - 飞书任务：https://applink.feishu.cn/client/todo/detail?guid=16089a8e-c460-4589-a579-e16b7d76793d
+
+## 绘图约定
+
+- **3D 等比例**：`ax.set_aspect('equal')` — 不用 `set_box_aspect`
+- **轴范围**：三个轴各 50mm（±25mm），以接触曲线的数据中心为各自中心
+- **中文**：`font.family = 'Microsoft YaHei'`，`axes.unicode_minus = False`
