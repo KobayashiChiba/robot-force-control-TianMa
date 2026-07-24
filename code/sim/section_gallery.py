@@ -20,7 +20,7 @@ from contact_frame_v2 import compute_frame
 plt.rcParams['font.family'] = 'Microsoft YaHei'
 plt.rcParams['axes.unicode_minus'] = False
 
-DATA_PATH = '../data/standard_curves_v2.pkl'
+DATA_PATH = '../data/standard_curves_v3.pkl'
 PLANE_SPAN = 12.0
 HALF_RANGE = 25.0
 EPS = 1e-10

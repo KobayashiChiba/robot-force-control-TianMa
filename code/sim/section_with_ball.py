@@ -20,7 +20,7 @@ from contact_frame_v2 import compute_frame
 plt.rcParams['font.family'] = 'Microsoft YaHei'
 plt.rcParams['axes.unicode_minus'] = False
 
-DATA_PATH = '../data/standard_curves_v2.pkl'
+DATA_PATH = '../data/standard_curves_v3.pkl'
 PLANE_SPAN = 12.0
 HALF_RANGE = 25.0
 
@@ -163,7 +163,23 @@ def plot_3d(ax, P0, t, n, b, cyl_z, cyl_y, contact_curve, sec, center,
     xs = ball_center[0] + R_ball * np.outer(np.cos(u_sp), np.sin(v_sp))
     ys = ball_center[1] + R_ball * np.outer(np.sin(u_sp), np.sin(v_sp))
     zs = ball_center[2] + R_ball * np.outer(np.ones_like(u_sp), np.cos(v_sp))
-    ax.plot_wireframe(xs, ys, zs, color='red', alpha=0.3, lw=0.3)
+    ax.plot_wireframe(xs, ys, zs, color='gray', alpha=0.25, lw=0.2)
+
+    # 球面接触区域（密集采样 + 3D判断）
+    n_th, n_ph = 40, 80
+    th = np.linspace(0, np.pi, n_th)
+    ph = np.linspace(0, 2*np.pi, n_ph, endpoint=False)
+    Th, Ph = np.meshgrid(th, ph)
+    xs_d = ball_center[0] + R_ball * np.sin(Th) * np.cos(Ph)
+    ys_d = ball_center[1] + R_ball * np.sin(Th) * np.sin(Ph)
+    zs_d = ball_center[2] + R_ball * np.cos(Th)
+    pts_d = np.column_stack([xs_d.ravel(), ys_d.ravel(), zs_d.ravel()])
+    in_z = _inside_cyl_z(pts_d, cyl_z)
+    in_y = _inside_cyl_y(pts_d, cyl_y)
+    contact = ~in_z & ~in_y  # 不在任何柱面内部 = 金属工件
+    if contact.any():
+        ax.scatter(xs_d.ravel()[contact], ys_d.ravel()[contact], zs_d.ravel()[contact],
+                   c='#FF4500', s=4, alpha=0.7, label='接触区域')
 
     # 法平面
     uu = np.linspace(-PLANE_SPAN, PLANE_SPAN, 10); vv = np.linspace(-PLANE_SPAN, PLANE_SPAN, 10)

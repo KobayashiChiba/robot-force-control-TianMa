@@ -191,9 +191,7 @@ def _build_closed_curve(curves):
 
 
 def _sample_uniform(closed_pts, n_samples):
-    """对闭合点列做均匀弧长采样。"""
-    M = len(closed_pts)
-
+    """对闭合点列做均匀弧长采样（线性插值，无重复）。"""
     diffs = np.diff(closed_pts, axis=0)
     chord_lens = np.linalg.norm(diffs, axis=1)
     chord_lens = np.append(chord_lens,
@@ -202,9 +200,14 @@ def _sample_uniform(closed_pts, n_samples):
     total_len = cum_len[-1]
 
     target_lens = np.linspace(0, total_len, n_samples, endpoint=False)
-    indices = [int(np.argmin(np.abs(cum_len[:M] - t))) for t in target_lens]
 
-    return closed_pts[indices]
+    # 线性插值（避免 argmin 最近邻导致的重复点）
+    closed_loop = np.vstack([closed_pts, closed_pts[0]])
+    sample_pts = np.zeros((n_samples, 3))
+    for d in range(3):
+        sample_pts[:, d] = np.interp(target_lens, cum_len, closed_loop[:, d])
+
+    return sample_pts
 
 
 # ============================================================

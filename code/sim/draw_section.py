@@ -21,7 +21,7 @@ from contact_frame_v2 import compute_frame
 plt.rcParams['font.family'] = 'Microsoft YaHei'
 plt.rcParams['axes.unicode_minus'] = False
 
-DATA_PATH = '../data/standard_curves_v2.pkl'
+DATA_PATH = '../data/standard_curves_v3.pkl'
 
 
 def load_data():
