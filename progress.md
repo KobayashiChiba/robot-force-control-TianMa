@@ -352,4 +352,31 @@ code/
 - `V2-API.md` — 完整 API 文档（5个模块 + 标准曲线 + 使用示例）
 
 ### ⏳ 待办
-- [ ] 误差修正算法仿真（阻抗控制 + PID）
+- [ ] 阻抗力控算法设计
+
+---
+
+## 2026-07-24：力模型 + GitHub + 可视化
+
+### GitHub 仓库
+- ✅ 创建 GitHub 仓库 `robot-force-control-TianMa`，推送全部代码
+
+### V2 代码库
+- ✅ `force_mechanics_v2.py` 新增正交基底 `{t, n, t×n}`
+- ✅ `cylinder_geometry_v2.py` 修复 `_sample_uniform`：argmin → np.interp
+
+### 数据处理
+- ✅ 接触曲线：V2圆柱参数 → 2000点均匀弧长，间距38μm
+- ✅ 球刀中心：5阶傅里叶拟合替代圆柱拟合，500点，误差13μm
+- ✅ `data/force_model.pkl` 保存完整模型参数
+
+### 力模型
+- ✅ 接触力 `F = k_c × √S`，R=4.2mm，k_c=7.37，均值≈8N
+- ✅ 摩擦力 μ=0.2，切向<2N；噪声 σ=0.5N
+- ✅ 正交分解 {t, n, t×n} → Ft/Fn/Fo
+
+### 可视化脚本
+- ✅ `draw_section.py` / `section_gallery.py` / `section_with_ball.py` / `force_profile.py` / `p0_force_field.py`
+
+### 误差实验
+- ✅ 不同方向轴线偏移产生可区分的力曲线指纹

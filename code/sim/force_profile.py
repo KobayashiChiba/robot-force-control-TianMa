@@ -17,7 +17,7 @@ plt.rcParams['font.family'] = 'Microsoft YaHei'
 plt.rcParams['axes.unicode_minus'] = False
 
 DATA_PATH = '../data/force_model.pkl'
-K_C = 6.80  # N/mm² (全接触面积, 标定均值=8N)
+K_C = 7.37  # N/mm² (全接触面积, 标定均值=8N)
 R_BALL = 4.2
 N_SPHERE_TH = 80
 N_SPHERE_PH = 160
@@ -62,7 +62,7 @@ def sphere_contact_force(ball_center, v_dir, cyl_z, cyl_y):
     force_dir = normals.mean(axis=0)
     force_dir /= np.linalg.norm(force_dir)
 
-    force_mag = K_C * area_total
+    force_mag = K_C * np.sqrt(max(0, area_total))
     return force_mag * force_dir, area_total
 
 def run(save_path=None):
