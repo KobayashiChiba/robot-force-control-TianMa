@@ -208,3 +208,125 @@ def compute_vertical_motion_trend(
     if norm > 1e-12:
         direction /= norm
     return abs(decomp.coeffs[2]) * direction
+
+
+# ============================================================
+# 正交基底 {t, n, ortho} — ortho = t × n
+# ============================================================
+
+@dataclass
+class BasisOrtho:
+    """曲线上一点的正交基底 {t, n, ortho}。
+
+    与非正交 Basis 的区别：第三轴改为 t × n（叉乘），保证三者两两正交。
+
+    Fields
+    ------
+    tangent : ndarray (3,) — 切向量 t = r_y × r_z（不变）
+    normal  : ndarray (3,) — 法向量 n = w_y·r_y + w_z·r_z（不变）
+    ortho   : ndarray (3,) — t × n，正交于 tangent 和 normal
+    """
+    tangent: np.ndarray
+    normal:  np.ndarray
+    ortho:   np.ndarray
+
+
+@dataclass
+class ForceDecompOrtho:
+    """力在正交基 {t, n, o} 上的分解结果。
+
+    Fields
+    ------
+    coeffs  : ndarray (3,)  — 分解系数 [a, b, c]（点积投影）
+    Ft_vec  : ndarray (3,)  — a * tangent   (切向)
+    Fn_vec  : ndarray (3,)  — b * normal    (法向)
+    Fo_vec  : ndarray (3,)  — c * ortho     (正交第三方向)
+    error   : float         — 重建误差 (应为 ~0)
+    """
+    coeffs:  np.ndarray
+    Ft_vec:  np.ndarray
+    Fn_vec:  np.ndarray
+    Fo_vec:  np.ndarray
+    error:   float
+
+
+def compute_point_basis_ortho(P: np.ndarray, geom: GeomV2) -> BasisOrtho:
+    """计算曲线上一点 P 处的正交基底 {t, n, t×n}。
+
+    切向量和法向量与原有非正交基底一致，第三轴 ortho = t × n。
+
+    Parameters
+    ----------
+    P : ndarray (3,)
+        采样点的空间坐标。
+    geom : GeomV2
+        sample_intersection() 的返回值。
+
+    Returns
+    -------
+    BasisOrtho
+    """
+    frame = compute_frame(P, geom.cyl1, geom.cyl2)
+    t = frame.tangent
+    n = frame.normal
+    o = np.cross(t, n)
+    o = o / np.linalg.norm(o)
+    return BasisOrtho(tangent=t, normal=n, ortho=o)
+
+
+def decompose_force_ortho(F: np.ndarray, basis: BasisOrtho) -> ForceDecompOrtho:
+    """将外力 F 在正交基 {t, n, o} 上分解。
+
+    正交基直接点积投影，无需解线性方程组。
+
+    Parameters
+    ----------
+    F : ndarray (3,)
+        外力向量。
+    basis : BasisOrtho
+        compute_point_basis_ortho() 的返回值。
+
+    Returns
+    -------
+    ForceDecompOrtho
+    """
+    t, n, o = basis.tangent, basis.normal, basis.ortho
+    a = np.dot(F, t)
+    b = np.dot(F, n)
+    c = np.dot(F, o)
+
+    Ft = a * t
+    Fn = b * n
+    Fo = c * o
+
+    return ForceDecompOrtho(
+        coeffs=np.array([a, b, c]),
+        Ft_vec=Ft, Fn_vec=Fn, Fo_vec=Fo,
+        error=np.linalg.norm(F - (Ft + Fn + Fo)),
+    )
+
+
+def expected_force_ortho(coeffs: np.ndarray, basis: BasisOrtho) -> ForceDecompOrtho:
+    """由给定分解系数反向构造力向量。
+
+    F = a*t + b*n + c*o
+
+    Parameters
+    ----------
+    coeffs : ndarray (3,) 或 tuple
+        分解系数 [a, b, c]。
+    basis : BasisOrtho
+
+    Returns
+    -------
+    ForceDecompOrtho
+    """
+    a, b, c = coeffs
+    t, n, o = basis.tangent, basis.normal, basis.ortho
+    Ft, Fn, Fo = a * t, b * n, c * o
+
+    return ForceDecompOrtho(
+        coeffs=np.asarray(coeffs, dtype=float),
+        Ft_vec=Ft, Fn_vec=Fn, Fo_vec=Fo,
+        error=0.0,
+    )

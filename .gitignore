@@ -10,5 +10,5 @@ build/
 *.npz
 *.xlsx
 *.docx
-**/output/*.png
+code/output/
 .DS_Store
