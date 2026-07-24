@@ -12,3 +12,4 @@ build/
 *.docx
 code/output/
 .DS_Store
+code/sim/output/
