@@ -30,7 +30,11 @@ sys.path.insert(0, os.path.join(_sdir, '..', 'sim'))
 
 import numpy as np
 import matplotlib
-matplotlib.use('TkAgg')
+import os as _os
+if 'DISPLAY' not in _os.environ and not _os.name == 'nt':
+    matplotlib.use('Agg')
+else:
+    matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from dataclasses import dataclass
@@ -143,11 +147,11 @@ class ForceFieldModel:
 # 5. 力控仿真主函数
 # ============================================================
 def run_force_control(cyl_y, cyl_z, tool_radius=4.0, n_steps=3000, dt=0.005,
-                      desired_fn=-2.0, preload_n=0.08, filt_alpha=0.15,
+                      desired_fn=2.0, preload_n=0.08, filt_alpha=0.15,
                       K_fo=0.15, label=""):
     """
     Args:
-        desired_fn: 期望法向力 (负值)
+        desired_fn: 期望法向力 (正值标量，N)
         preload_n: 初始预压量 (mm, 沿法向)
         K_fo: 复法向力修正增益
     """
@@ -229,7 +233,7 @@ def run_force_control(cyl_y, cyl_z, tool_radius=4.0, n_steps=3000, dt=0.005,
             dn_est, db_est = 0.0, 0.0
 
         # ── 导纳控制 ──
-        force_error = desired_fn - Fn_meas
+        force_error = desired_fn - abs(Fn_meas)
         delta_n_cmd = adm.compute(force_error)
 
         # ── 位置更新 ──
@@ -251,7 +255,7 @@ def run_force_control(cyl_y, cyl_z, tool_radius=4.0, n_steps=3000, dt=0.005,
         quat = rotmat_to_quat(Rmat_new)
 
         trajectory.append(robot_pos.copy())
-        force_log.append(Fn_meas)
+        force_log.append(abs(Fn_meas))
         dn_log.append(dn_real)
         db_log.append(db_real)
 
@@ -288,9 +292,9 @@ def plot_comparison(ref0, off0, traj0, ref1, off1, traj1,
     ax2 = fig.add_subplot(222)
     ax2.plot(force0, 'b-', lw=0.8, label='无误差')
     ax2.plot(force1, 'r-', lw=0.8, label=f'倾斜{int(tilt_angle)}°')
-    ax2.axhline(-2.0, color='gray', ls='--', lw=0.5)
+    ax2.axhline(2.0, color='gray', ls='--', lw=0.5)
     ax2.set_ylabel('Fn (N)'); ax2.set_xlabel('仿真步数')
-    ax2.set_title(f'法向力 (目标=-2N)'); ax2.legend()
+    ax2.set_title(f'法向力 (目标=2N)'); ax2.legend()
     ax2.grid(alpha=0.3)
 
     # ── dn(db)偏移 ──
@@ -311,7 +315,9 @@ def plot_comparison(ref0, off0, traj0, ref1, off1, traj1,
 
     fig.suptitle(f'V2力场模型 + 导纳控制 去毛刺力控仿真 (Z轴倾斜{int(tilt_angle)}°)', fontsize=14)
     fig.tight_layout()
-    plt.show(block=True)
+    fig.savefig(os.path.join(_sdir, 'output', 'force_control_sim.png'), dpi=150)
+    print(f'已保存 output/force_control_sim.png')
+    plt.close(fig)
 
 
 # ============================================================
@@ -343,12 +349,12 @@ def main():
     print("\n[2] 无误差仿真...")
     cy0, cz0 = generate_cylinders(0.0)
     traj0, f0, dn0, db0, ref0, off0 = run_force_control(
-        cy0, cz0, desired_fn=-2.0, preload_n=0.08, label='无误差')
+        cy0, cz0, desired_fn=2.0, preload_n=0.08, label='无误差')
 
     print(f"\n[3] 倾斜 {int(TILT)}° 仿真...")
     cy1, cz1 = generate_cylinders(TILT)
     traj1, f1, dn1, db1, ref1, off1 = run_force_control(
-        cy1, cz1, desired_fn=-2.0, preload_n=0.08, label=f'倾斜{int(TILT)}°')
+        cy1, cz1, desired_fn=2.0, preload_n=0.08, label=f'倾斜{int(TILT)}°')
 
     print("\n[4] 生成对比图...")
     plot_comparison(ref0, off0, traj0, ref1, off1, traj1,
