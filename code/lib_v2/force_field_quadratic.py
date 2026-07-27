@@ -1,37 +1,31 @@
 """
-force_field_quadratic.py — 力场模型：统一二次多项式
+force_field_quadratic.py — 力场全局二次模型
 
-模型：
-  ΔFn = Fn - Fn0(p) = c1*dn + c2*db + c3*dn² + c4*dn·db + c5*db²
-  ΔFo = Fo - Fo0(p) = c1*dn + c2*db + c3*dn² + c4*dn·db + c5*db²
+用 lib 的 compute_point_basis_ortho → {normal, ortho=t×n} 正交分解。
+所有曲线位置混合标定，不分进度。
 
-接口：
-  calibrate()        → 拟合系数，保存到 data/force_field_quadratic.npz
-  predict(dn, db)    → 预测 (ΔFn, ΔFo)
-  inverse(Fn, Fo, p) → 从测量力反推偏移量 (dn, db)，需传入曲线进度 p 用于查基准力
-
-特点：精度高，逆推稳定，需要 Newton 迭代（2×2 方程组，通常3-5步收敛）
+接口:
+  calibrate()            → 全局拟合 + 保存 + 出验证图
+  predict(dn, db)        → 预测 (Fn, Fo)
+  inverse(Fn, Fo)        → 从测量力反推偏移量，Newton 迭代
 """
 
-import sys, os
+import sys, os, pickle
+import numpy as np
+
 _sdir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, '.')
 sys.path.insert(0, _sdir)
-sys.path.insert(0, os.path.join(_sdir, '..', 'sim'))
 
-import pickle
-import numpy as np
-from force_profile import sphere_contact_force
-from contact_frame_v2 import compute_frame
+from sphere_contact import sphere_contact_force
+from force_mechanics_v2 import compute_point_basis_ortho
 
-# ── 全局参数（calibrate() 后填充） ──
-_COEF = None       # dict: {'dn': [c1..c5], 'dfo': [c1..c5]}
-_BASE_TABLE = None  # list of (p_idx, Fn0, Fo0)
+_COEF = None    # {'dn': [c0..c5], 'dfo': [c0..c5]}
 
 
-def calibrate(save_path='../data/force_field_quadratic.npz'):
-    """统一二次拟合，返回系数，保存到 npz"""
-    global _COEF, _BASE_TABLE
+def calibrate(save_name='force_field_global.npz'):
+    """全局混合标定：20 个位置统一拟合 Fn(dn,db) 和 Fo(dn,db)。"""
+    global _COEF
 
     with open(os.path.join(_sdir, '..', 'data', 'force_model.pkl'), 'rb') as f:
         d = pickle.load(f)
@@ -39,134 +33,158 @@ def calibrate(save_path='../data/force_field_quadratic.npz'):
     ball = d['ball_center_500']
     cy = d['cyl_contact_y']
     cz = d['cyl_contact_z']
-    cg = d['contact_geom'].sample_pts
+    geom = d['contact_geom']       # GeomV2，2000点接触曲线
     Npts = len(ball)
 
-    R = 2
-    Ng = 21
+    R, Ng, N_pos = 2, 21, 20
     dn = np.linspace(-R, R, Ng)
     db = np.linspace(-R, R, Ng)
 
-    base_list = []
-    all_dFn = []
-    all_dFo = []
-    AA = []
+    all_Fn, all_Fo, AA = [], [], []
 
-    for p in np.linspace(0, 0.99, 20):
+    for p in np.linspace(0, 0.99, N_pos):
         i = min(int(p * Npts), Npts - 1)
         bc0 = ball[i]
-        idx = np.argmin(np.linalg.norm(cg - bc0, axis=1))
-        Pc = cg[idx]
-        frame = compute_frame(Pc, cy, cz)
-        n = frame.normal
-        b = np.cross(frame.tangent, n)
-        b /= np.linalg.norm(b)
-
-        f0, _ = sphere_contact_force(bc0, np.array([0, -1, 0]), cz, cy)
-        Fn0 = np.dot(f0, n)
-        Fo0 = np.dot(f0, b)
-        base_list.append((i, Fn0, Fo0))
+        idx = np.argmin(np.linalg.norm(geom.sample_pts - bc0, axis=1))
+        Pc = geom.sample_pts[idx]
+        basis = compute_point_basis_ortho(Pc, geom)
+        n = basis.normal
+        o = basis.ortho
 
         for dni in dn:
             for dbj in db:
-                f, _ = sphere_contact_force(
-                    bc0 + dni*n + dbj*b, np.array([0, -1, 0]), cz, cy)
+                f, _ = sphere_contact_force(bc0 + dni * n + dbj * o, cz, cy)
                 if np.linalg.norm(f) > 0.5:
-                    all_dFn.append(np.dot(f, n) - Fn0)
-                    all_dFo.append(np.dot(f, b) - Fo0)
-                    AA.append([dni, dbj, dni**2, dni*dbj, dbj**2])
+                    all_Fn.append(np.dot(f, n))
+                    all_Fo.append(np.dot(f, o))
+                    AA.append([1.0, dni, dbj, dni ** 2, dni * dbj, dbj ** 2])
 
-    all_dFn = np.array(all_dFn)
-    all_dFo = np.array(all_dFo)
+    all_Fn = np.array(all_Fn)
+    all_Fo = np.array(all_Fo)
     AA = np.array(AA)
 
-    c_dfn, _, _, _ = np.linalg.lstsq(AA, all_dFn, rcond=None)
-    c_dfo, _, _, _ = np.linalg.lstsq(AA, all_dFo, rcond=None)
+    c_fn, _, _, _ = np.linalg.lstsq(AA, all_Fn, rcond=None)
+    c_fo, _, _, _ = np.linalg.lstsq(AA, all_Fo, rcond=None)
 
-    _COEF = {'dn': list(c_dfn), 'dfo': list(c_dfo)}
-    _BASE_TABLE = base_list
+    _COEF = {'dn': list(c_fn), 'dfo': list(c_fo)}
 
-    np.savez(os.path.join(_sdir, '..', 'data', 'force_field_quadratic.npz'),
-             c_dfn=c_dfn, c_dfo=c_dfo,
-             base_indices=[b[0] for b in base_list],
-             base_Fn0=[b[1] for b in base_list],
-             base_Fo0=[b[2] for b in base_list])
+    save_path = os.path.join(_sdir, '..', 'data', save_name)
+    np.savez(save_path, c_fn=c_fn, c_fo=c_fo)
 
-    print(f'二次拟合完成: {len(all_dFn)} 采样点')
-    print(f'  ΔFn = {c_dfn[0]:+.3f}*dn {c_dfn[1]:+.3f}*db {c_dfn[2]:+.3f}*dn² {c_dfn[3]:+.3f}*dn·db {c_dfn[4]:+.3f}*db²')
-    print(f'  ΔFo = {c_dfo[0]:+.3f}*dn {c_dfo[1]:+.3f}*db {c_dfo[2]:+.3f}*dn² {c_dfo[3]:+.3f}*dn·db {c_dfo[4]:+.3f}*db²')
+    # --- 验证图 ---
+    Fn_pred = AA @ c_fn
+    Fo_pred = AA @ c_fo
+    err_n = np.abs(Fn_pred - all_Fn)
+    err_o = np.abs(Fo_pred - all_Fo)
 
-    return _COEF, _BASE_TABLE
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
+    matplotlib.rcParams['axes.unicode_minus'] = False
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+
+    # 行1：Fn / Fo / 残差
+    for ax, title, pred, actual, err, color in [
+        (axes[0, 0], 'Fn', Fn_pred, all_Fn, err_n, '#3498db'),
+        (axes[0, 1], 'Fo', Fo_pred, all_Fo, err_o, '#e74c3c'),
+    ]:
+        ax.scatter(actual, pred, s=1, alpha=0.3, color=color)
+        mn = min(actual.min(), pred.min())
+        mx = max(actual.max(), pred.max())
+        ax.plot([mn, mx], [mn, mx], 'k--', lw=0.5)
+        ax.set_xlabel('实际 (N)'); ax.set_ylabel('预测 (N)')
+        ax.set_title(f'{title}  中位误差 {np.median(err):.3f}N')
+        ax.grid(alpha=0.3)
+
+    ax = axes[0, 2]
+    ax.hist(err_n, bins=50, alpha=0.6, color='#3498db', label=f'Fn')
+    ax.hist(err_o, bins=50, alpha=0.6, color='#e74c3c', label=f'Fo')
+    ax.legend(fontsize=8); ax.set_xlabel('绝对误差 (N)'); ax.set_title('残差分布')
+
+    # 行2：力场热力图
+    R2, Ng2 = 3, 50
+    dn2 = np.linspace(-R2, R2, Ng2); db2 = np.linspace(-R2, R2, Ng2)
+    DN, DB = np.meshgrid(dn2, db2)
+    f_fn = np.zeros_like(DN); f_fo = np.zeros_like(DN)
+    for ii in range(Ng2):
+        for jj in range(Ng2):
+            x = np.array([1, DN[ii, jj], DB[ii, jj], DN[ii, jj]**2, DN[ii, jj]*DB[ii, jj], DB[ii, jj]**2])
+            f_fn[ii, jj] = x @ c_fn
+            f_fo[ii, jj] = x @ c_fo
+
+    ax = axes[1, 0]; im = ax.contourf(DN, DB, f_fn, levels=20, cmap='Blues')
+    plt.colorbar(im, ax=ax, label='Fn (N)'); ax.set_xlabel('dn (mm)'); ax.set_ylabel('db (mm)')
+    ax.set_title('Fn 力场 (标定)'); ax.axhline(0, color='gray', lw=0.5); ax.axvline(0, color='gray', lw=0.5)
+    ax = axes[1, 1]; im = ax.contourf(DN, DB, f_fo, levels=20, cmap='Reds')
+    plt.colorbar(im, ax=ax, label='Fo (N)'); ax.set_xlabel('dn (mm)'); ax.set_ylabel('db (mm)')
+    ax.set_title('Fo 力场 (标定)'); ax.axhline(0, color='gray', lw=0.5); ax.axvline(0, color='gray', lw=0.5)
+
+    ax = axes[1, 2]; ax.axis('off')
+    td = [
+        ['系数', 'Fn', 'Fo'],
+        ['c0', f'{c_fn[0]:.3f}', f'{c_fo[0]:.3f}'],
+        ['dn', f'{c_fn[1]:.3f}', f'{c_fo[1]:.3f}'],
+        ['db', f'{c_fn[2]:.3f}', f'{c_fo[2]:.3f}'],
+        ['dn^2', f'{c_fn[3]:.3f}', f'{c_fo[3]:.3f}'],
+        ['dn*db', f'{c_fn[4]:.3f}', f'{c_fo[4]:.3f}'],
+        ['db^2', f'{c_fn[5]:.3f}', f'{c_fo[5]:.3f}'],
+        ['', '', ''],
+        ['中位误差', f'{np.median(err_n):.3f}N', f'{np.median(err_o):.3f}N'],
+    ]
+    tbl = ax.table(cellText=td, loc='center', cellLoc='center')
+    tbl.auto_set_font_size(False); tbl.set_fontsize(8); tbl.scale(1, 1.6)
+    ax.set_title(f'全局混合标定 {len(all_Fn)} 点', y=0.7)
+
+    fig.suptitle('力场全局二次模型标定 (正交基底)', fontsize=14)
+    fig.tight_layout()
+    out = os.path.join(_sdir, '..', 'sim', 'output', 'force_field_calibration.png')
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+    print(f'全局混合标定: {len(all_Fn)} 采样点')
+    print(f'  Fn = {c_fn[0]:.3f} {c_fn[1]:+.3f}*dn {c_fn[2]:+.3f}*db {c_fn[3]:+.3f}*dn^2 {c_fn[4]:+.3f}*dn*db {c_fn[5]:+.3f}*db^2')
+    print(f'  Fo = {c_fo[0]:.3f} {c_fo[1]:+.3f}*dn {c_fo[2]:+.3f}*db {c_fo[3]:+.3f}*dn^2 {c_fo[4]:+.3f}*dn*db {c_fo[5]:+.3f}*db^2')
+    print(f'  Fn 中位误差 {np.median(err_n):.3f}N  Fo 中位误差 {np.median(err_o):.3f}N')
+    print(f'已保存 {out}')
+
+    return _COEF
 
 
-def _load_if_needed():
-    """惰性加载已保存的标定数据"""
-    global _COEF, _BASE_TABLE
+def _load():
+    global _COEF
     if _COEF is not None:
         return
-    try:
-        npz = np.load(os.path.join(_sdir, '..', 'data', 'force_field_quadratic.npz'))
-        _COEF = {'dn': list(npz['c_dfn']), 'dfo': list(npz['c_dfo'])}
-        idxs = npz['base_indices']
-        fns = npz['base_Fn0']
-        fos = npz['base_Fo0']
-        _BASE_TABLE = [(int(idxs[i]), float(fns[i]), float(fos[i])) for i in range(len(idxs))]
-    except FileNotFoundError:
-        raise RuntimeError('未找到标定文件，请先运行 calibrate()')
+    npz = np.load(os.path.join(_sdir, '..', 'data', 'force_field_global.npz'))
+    _COEF = {'dn': list(npz['c_fn']), 'dfo': list(npz['c_fo'])}
 
 
 def predict(dn, db):
-    """预测偏移量 (dn, db) 下的力变化 (ΔFn, ΔFo)"""
-    _load_if_needed()
-    c_fn = _COEF['dn']
-    c_fo = _COEF['dfo']
-    dFn = c_fn[0]*dn + c_fn[1]*db + c_fn[2]*dn**2 + c_fn[3]*dn*db + c_fn[4]*db**2
-    dFo = c_fo[0]*dn + c_fo[1]*db + c_fo[2]*dn**2 + c_fo[3]*dn*db + c_fo[4]*db**2
-    return dFn, dFo
+    _load()
+    c_fn = _COEF['dn']; c_fo = _COEF['dfo']
+    x = np.array([1, dn, db, dn**2, dn*db, db**2])
+    return float(x @ c_fn), float(x @ c_fo)
 
 
-def get_base(p_idx):
-    """查基准力值 Fn0(p_idx), Fo0(p_idx)
-    p_idx: 0~499 的采样点索引
-    """
-    _load_if_needed()
-    # 找最近的基准点
-    best = min(_BASE_TABLE, key=lambda x: abs(x[0] - p_idx))
-    return best[1], best[2]
-
-
-def inverse(Fn_meas, Fo_meas, p_idx, max_iter=10, tol=1e-6):
-    """从测量力反推偏移量
-
-    Args:
-        Fn_meas, Fo_meas: 传感器测到的有符号法向力、复法向力 (N)
-        p_idx: 曲线进度索引 (0~499)，用于查基准力
-    Returns:
-        (dn, db) 偏移量 (mm)，或 (0, 0) 如果脱离接触
-    """
-    _load_if_needed()
-    if abs(Fn_meas) < 0.5:  # 脱离接触，无法判断
+def inverse(Fn_meas, Fo_meas, max_iter=15, tol=1e-6):
+    _load()
+    if abs(Fn_meas) < 0.5:
         return 0.0, 0.0
 
-    Fn0, Fo0 = get_base(p_idx)
-    dFn = Fn_meas - Fn0
-    dFo = Fo_meas - Fo0
-
-    c_fn = _COEF['dn']
-    c_fo = _COEF['dfo']
-
+    c_fn = _COEF['dn']; c_fo = _COEF['dfo']
     x = np.zeros(2)
+
     for _ in range(max_iter):
-        Fnp = c_fn[0]*x[0] + c_fn[1]*x[1] + c_fn[2]*x[0]**2 + c_fn[3]*x[0]*x[1] + c_fn[4]*x[1]**2
-        Fop = c_fo[0]*x[0] + c_fo[1]*x[1] + c_fo[2]*x[0]**2 + c_fo[3]*x[0]*x[1] + c_fo[4]*x[1]**2
+        dn, db = x
+        Fnp = c_fn[0] + c_fn[1]*dn + c_fn[2]*db + c_fn[3]*dn**2 + c_fn[4]*dn*db + c_fn[5]*db**2
+        Fop = c_fo[0] + c_fo[1]*dn + c_fo[2]*db + c_fo[3]*dn**2 + c_fo[4]*dn*db + c_fo[5]*db**2
         J = np.array([
-            [c_fn[0] + 2*c_fn[2]*x[0] + c_fn[3]*x[1],
-             c_fn[1] + c_fn[3]*x[0] + 2*c_fn[4]*x[1]],
-            [c_fo[0] + 2*c_fo[2]*x[0] + c_fo[3]*x[1],
-             c_fo[1] + c_fo[3]*x[0] + 2*c_fo[4]*x[1]],
+            [c_fn[1] + 2*c_fn[3]*dn + c_fn[4]*db, c_fn[2] + c_fn[4]*dn + 2*c_fn[5]*db],
+            [c_fo[1] + 2*c_fo[3]*dn + c_fo[4]*db, c_fo[2] + c_fo[4]*dn + 2*c_fo[5]*db],
         ])
         try:
-            delta = np.linalg.solve(J, [dFn - Fnp, dFo - Fop])
+            delta = np.linalg.solve(J, [Fn_meas - Fnp, Fo_meas - Fop])
         except np.linalg.LinAlgError:
             break
         x += delta
@@ -176,42 +194,5 @@ def inverse(Fn_meas, Fo_meas, p_idx, max_iter=10, tol=1e-6):
     return float(x[0]), float(x[1])
 
 
-# ── 自测 ──
 if __name__ == '__main__':
     calibrate()
-
-    # 随机验证
-    with open(os.path.join(_sdir, '..', 'data', 'force_model.pkl'), 'rb') as f:
-        d = pickle.load(f)
-    ball = d['ball_center_500']
-    cy = d['cyl_contact_y']
-    cz = d['cyl_contact_z']
-    cg = d['contact_geom'].sample_pts
-
-    np.random.seed(42)
-    errs = []
-    for _ in range(50):
-        p = np.random.uniform(0, 1)
-        i = min(int(p * len(ball)), len(ball) - 1)
-        bc0 = ball[i]
-        idx = np.argmin(np.linalg.norm(cg - bc0, axis=1))
-        Pc = cg[idx]
-        frame = compute_frame(Pc, cy, cz)
-        n = frame.normal
-        b = np.cross(frame.tangent, n)
-        b /= np.linalg.norm(b)
-
-        dn_t = np.random.uniform(-1.5, 1.5)
-        db_t = np.random.uniform(-1.5, 1.5)
-        f, _ = sphere_contact_force(
-            bc0 + dn_t*n + db_t*b, np.array([0, -1, 0]), cz, cy)
-        if np.linalg.norm(f) < 0.5:
-            continue
-        Fn_m = np.dot(f, n)
-        Fo_m = np.dot(f, b)
-        dn_e, db_e = inverse(Fn_m, Fo_m, i)
-        err = np.linalg.norm([dn_e - dn_t, db_e - db_t])
-        errs.append(err)
-
-    errs = np.array(errs)
-    print(f'\n自测 {len(errs)} 点: 中位误差 {np.median(errs):.3f}mm  均值 {errs.mean():.3f}mm  max {errs.max():.3f}mm')

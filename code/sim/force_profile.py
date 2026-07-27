@@ -11,59 +11,17 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from contact_frame_v2 import compute_frame
+from force_mechanics_v2 import compute_point_basis_ortho
+from sphere_contact import sphere_contact_force
 
 plt.rcParams['font.family'] = 'Microsoft YaHei'
-
 plt.rcParams['axes.unicode_minus'] = False
 
 DATA_PATH = '../data/force_model.pkl'
-K_C = 7.37  # N/mm² (全接触面积, 标定均值=8N)
-R_BALL = 4.2
-N_SPHERE_TH = 80
-N_SPHERE_PH = 160
 
 def load_data():
     with open(DATA_PATH, 'rb') as f:
         return pickle.load(f)
-
-def _inside_cyl_z(pts, cyl_z):
-    X0, Y0 = cyl_z.axis_point[0], cyl_z.axis_point[1]; R = cyl_z.radius
-    return np.sqrt((pts[:,0]-X0)**2 + (pts[:,1]-Y0)**2) < R - 1e-6
-
-def _inside_cyl_y(pts, cyl_y):
-    X0, Z0 = cyl_y.axis_point[0], cyl_y.axis_point[2]; R = cyl_y.radius
-    return np.sqrt((pts[:,0]-X0)**2 + (pts[:,2]-Z0)**2) < R - 1e-6
-
-def sphere_contact_force(ball_center, v_dir, cyl_z, cyl_y):
-    """球面采样 → 全部接触面积 → 力。
-
-    Returns: force_3d, area_total
-    """
-    th = np.linspace(0, np.pi, N_SPHERE_TH)
-    ph = np.linspace(0, 2*np.pi, N_SPHERE_PH, endpoint=False)
-    Th, Ph = np.meshgrid(th, ph)
-    xs = ball_center[0] + R_BALL * np.sin(Th) * np.cos(Ph)
-    ys = ball_center[1] + R_BALL * np.sin(Th) * np.sin(Ph)
-    zs = ball_center[2] + R_BALL * np.cos(Th)
-    pts = np.column_stack([xs.ravel(), ys.ravel(), zs.ravel()])
-
-    in_z = _inside_cyl_z(pts, cyl_z)
-    in_y = _inside_cyl_y(pts, cyl_y)
-    contact = ~in_z & ~in_y
-    area_total = contact.sum() * (4*np.pi*R_BALL**2) / (N_SPHERE_TH*N_SPHERE_PH)
-
-    if not contact.any():
-        return np.zeros(3), area_total
-
-    # 接触力方向 = 所有接触点平均法向（指向球心）
-    c_pts = pts[contact]
-    normals = ball_center - c_pts
-    normals /= np.linalg.norm(normals, axis=1, keepdims=True)
-    force_dir = normals.mean(axis=0)
-    force_dir /= np.linalg.norm(force_dir)
-
-    force_mag = K_C * np.sqrt(max(0, area_total))
-    return force_mag * force_dir, area_total
 
 def run(save_path=None):
     data = load_data()
@@ -91,13 +49,13 @@ def run(save_path=None):
         v_diff = ball_centers[1]-ball_centers[0] if i==0 else ball_centers[i]-ball_centers[i-1]
         v_dir = v_diff / np.linalg.norm(v_diff)
 
-        f_vec, at = sphere_contact_force(ball_center, v_dir, cyl_z, cyl_y)
+        f_vec, at = sphere_contact_force(ball_center, cyl_z, cyl_y)
         forces[i] = f_vec
         areas[i] = at
 
         # 正交分解
-        frame = compute_frame(P_contact, cyl_y, cyl_z)
-        t = frame.tangent; nb = frame.normal; ob = np.cross(t, nb); ob /= np.linalg.norm(ob)
+        basis = compute_point_basis_ortho(P_contact, contact_geom)
+        t = basis.tangent; nb = basis.normal; ob = basis.ortho
         Ft[i] = np.dot(f_vec, t); Fn[i] = np.dot(f_vec, nb); Fo[i] = np.dot(f_vec, ob)
 
         # 摩擦力
