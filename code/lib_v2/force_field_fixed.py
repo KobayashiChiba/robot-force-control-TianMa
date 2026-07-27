@@ -13,7 +13,8 @@ KO = 4.954
 
 def inverse(Fn_meas, Fo_meas):
     if Fn_meas >= 0:
-        return 0.0, 0.0
+        # 无接触：推力方向的目标搜索偏移，让PID往n方向推
+        return 0.5, 0.0
     dn = (F_TARGET - Fn_meas) / KN
     db = 0.0
     return dn, db
