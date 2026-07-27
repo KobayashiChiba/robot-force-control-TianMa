@@ -416,3 +416,28 @@ code/
 - `code/lib_v2/force_field_fixed.py` — 力场一次模型
 - `code/sim/run_sim_v5.py` — 运行脚本
 - 已推 GitHub: `9c15421`
+
+---
+
+## 2026-07-27（续）：V5 db 反馈（Fo→o方向）
+
+### 改动
+- `force_field_fixed.py` inverse 新增 o 方向逆推：`db = -Fo / KO`，KO=1.4
+- 控制器 `force_control_sim_v5.py` o 方向 PID 改为 `pid_o.step(db_target - do_actual)`
+- o-PID 增益降至 Kp=8.0, Ki=0.05（避免干扰 n 方向）
+
+### 迭代过程
+- 初版方案B乘积模型 `db = Fo/(ko·dn)`：dn≈0.05mm 处分母病态 + 符号反了（正反馈），导致 8.00→9.02N
+- 改加性模型 `db = α·dn - Fo/KO`：α=-2.0 稍改善，但不明显
+- 最终 `db = -Fo/KO`（纯负反馈）：最简单有效
+
+### 结果
+| 工况 | 改前 | 改后 |
+|:--|:--|:--|
+| 无误差 | 8.00±0.08 | **7.91±0.09** |
+| X+1.5mm | 9.20±0.33 | **8.96±0.17** |
+| 随机±0.5mm (10组) | 9.1~9.3N | **7.47~8.44N** |
+
+### 脚本
+- `code/sim/run_sim_v5_batch.py` — 批量误差测试（11组）
+- `code/sim/run_sim_v5_rand.py` — 随机误差 3D 图（10组，含标准/误差接触曲线+球刀参考）

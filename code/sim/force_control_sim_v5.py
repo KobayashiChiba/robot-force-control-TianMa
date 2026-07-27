@@ -94,7 +94,7 @@ class ForceController:
         self.L = self.arc[-1]
 
         self.pid_n = PID1D()
-        self.pid_o = PID1D()
+        self.pid_o = PID1D(Kp=8.0, Ki=0.05, Kd=0.0, dt=DT)
         self.filt_fn = LowPass()
         self.filt_fo = LowPass()
 
@@ -141,9 +141,10 @@ class ForceController:
         do_actual = np.dot(P_cur - P_ref, o)
 
         # PID 直接追逆推值——逆推归零时力=目标
-        dn_target, _ = inverse(Fn_f, Fo_f)
+        # dn_actual 用于 db 反推（Fo ∝ dn_actual·db）
+        dn_target, db_target = inverse(Fn_f, Fo_f, dn_actual)
         vn = self.pid_n.step(dn_target)
-        vb = self.pid_o.step(0.0 - do_actual)
+        vb = self.pid_o.step(db_target - do_actual)
 
         # 切向推动（参考轨迹切线）
         t_ref = self._ref_tangent(s_sim)
