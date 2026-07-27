@@ -41,7 +41,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from cylinder_def import CylinderDef
-from cylinder_geometry_v2 import sample_intersection_v2
+from cylinder_geometry_v2 import sample_intersection, GeomV2
 from contact_frame_v2 import compute_frame
 from force_mechanics_v2 import decompose_force, Basis, ForceDecomp
 from force_field_quadratic import calibrate as calib_quad, inverse as inv_quad, predict as pred_quad, get_base
@@ -152,7 +152,7 @@ def run_force_control(cyl_y, cyl_z, tool_radius=4.0, n_steps=3000, dt=0.005,
         K_fo: 复法向力修正增益
     """
     # ── 参考轨迹 ──
-    ref_ideal = sample_intersection_v2(cyl_y, cyl_z, n_samples=500, N_curve=250)
+    ref_ideal = sample_intersection(cyl_y, cyl_z, n_samples=500, N_curve=250).sample_pts
     if np.linalg.norm(ref_ideal[-1] - ref_ideal[0]) > 1e-9:
         ref_ideal = np.vstack([ref_ideal, ref_ideal[0:1]])
 
@@ -206,7 +206,7 @@ def run_force_control(cyl_y, cyl_z, tool_radius=4.0, n_steps=3000, dt=0.005,
         frame = compute_frame(P_ideal, cyl_y, cyl_z)
         t_vec = frame.tangent
         n_inner = -frame.normal
-        b_vec = frame.vertical
+        b_vec = frame.radial_z
         b_vec /= np.linalg.norm(b_vec) if np.linalg.norm(b_vec) > 1e-12 else 1.0
 
         # ── 算实际偏移 (dn, db) — 仿真真实力 ──
@@ -244,7 +244,7 @@ def run_force_control(cyl_y, cyl_z, tool_radius=4.0, n_steps=3000, dt=0.005,
         prev_pos = robot_pos.copy()
 
         # ── 姿态跟随切线 ──
-        y_new = np.cross(t_vec, frame.vertical)
+        y_new = np.cross(t_vec, frame.radial_z)
         y_new /= np.linalg.norm(y_new) if np.linalg.norm(y_new) > 1e-12 else 1.0
         z_new = np.cross(t_vec, y_new)
         Rmat_new = np.column_stack([t_vec, y_new, z_new])
