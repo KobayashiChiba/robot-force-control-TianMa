@@ -147,7 +147,7 @@ class ForceFieldModel:
 # 5. 力控仿真主函数
 # ============================================================
 def run_force_control(cyl_y, cyl_z, tool_radius=4.0, n_steps=3000, dt=0.005,
-                      desired_fn=2.0, preload_n=0.08, filt_alpha=0.15,
+                      desired_fn=8.0, preload_n=0.08, filt_alpha=0.15,
                       K_fo=0.15, label=""):
     """
     Args:
@@ -285,6 +285,14 @@ def plot_comparison(ref0, off0, traj0, ref1, off1, traj1,
     ax.plot(traj0[:,0], traj0[:,1], traj0[:,2], 'blue', lw=1.5, label='力控轨迹(无误差)')
     ax.plot(traj1[:,0], traj1[:,1], traj1[:,2], 'red',  lw=1.5, label=f'力控轨迹(倾斜{int(tilt_angle)}°)')
     ax.set_xlabel('X'); ax.set_ylabel('Y'); ax.set_zlabel('Z')
+    # 三轴等比例
+    x_vals = np.concatenate([ref0[:,0], traj0[:,0], ref1[:,0], traj1[:,0]])
+    y_vals = np.concatenate([ref0[:,1], traj0[:,1], ref1[:,1], traj1[:,1]])
+    z_vals = np.concatenate([ref0[:,2], traj0[:,2], ref1[:,2], traj1[:,2]])
+    xr = x_vals.max() - x_vals.min()
+    yr = y_vals.max() - y_vals.min()
+    zr = z_vals.max() - z_vals.min()
+    ax.set_box_aspect([xr, yr, zr])
     ax.set_title('3D轨迹对比')
     ax.legend(fontsize=7)
 
@@ -292,9 +300,9 @@ def plot_comparison(ref0, off0, traj0, ref1, off1, traj1,
     ax2 = fig.add_subplot(222)
     ax2.plot(force0, 'b-', lw=0.8, label='无误差')
     ax2.plot(force1, 'r-', lw=0.8, label=f'倾斜{int(tilt_angle)}°')
-    ax2.axhline(2.0, color='gray', ls='--', lw=0.5)
-    ax2.set_ylabel('Fn (N)'); ax2.set_xlabel('仿真步数')
-    ax2.set_title(f'法向力 (目标=2N)'); ax2.legend()
+    ax2.axhline(8.0, color='gray', ls='--', lw=0.5)
+    ax2.set_ylabel('|Fn| (N)'); ax2.set_xlabel('仿真步数')
+    ax2.set_title(f'法向力 (目标=8N)'); ax2.legend()
     ax2.grid(alpha=0.3)
 
     # ── dn(db)偏移 ──
@@ -324,14 +332,23 @@ def plot_comparison(ref0, off0, traj0, ref1, off1, traj1,
 # 7. 生成圆柱
 # ============================================================
 def generate_cylinders(tilt_angle_deg=0.0):
-    cyl_y = CylinderDef(p1=np.array([0, -20, 0]), p2=np.array([0, 20, 0]), radius=10.0)
-    angle = np.radians(tilt_angle_deg)
-    dir_z = np.array([np.sin(angle), 0, np.cos(angle)])
-    center = np.array([27, 0, 0])
-    length = 40.0
-    p1 = center - (length / 2) * dir_z
-    p2 = center + (length / 2) * dir_z
-    cyl_z = CylinderDef(p1=p1, p2=p2, radius=20.0)
+    """加载真实圆柱参数（从 force_model.pkl）。tilt_angle_deg 只倾斜 Z 圆柱"""
+    data_path = os.path.join(_sdir, '..', 'data', 'force_model.pkl')
+    with open(data_path, 'rb') as f:
+        d = pickle.load(f)
+    cyl_y = d['cyl_contact_y']
+    cyl_z = d['cyl_contact_z']
+
+    if tilt_angle_deg != 0:
+        # Z 圆柱绕 Y 轴倾斜
+        angle = np.radians(tilt_angle_deg)
+        dir_z = np.array([np.sin(angle), 0, np.cos(angle)])
+        center = (cyl_z.p1 + cyl_z.p2) / 2
+        length = np.linalg.norm(cyl_z.p2 - cyl_z.p1)
+        p1 = center - (length / 2) * dir_z
+        p2 = center + (length / 2) * dir_z
+        cyl_z = CylinderDef(p1=p1, p2=p2, radius=cyl_z.radius)
+
     return cyl_y, cyl_z
 
 
@@ -349,12 +366,12 @@ def main():
     print("\n[2] 无误差仿真...")
     cy0, cz0 = generate_cylinders(0.0)
     traj0, f0, dn0, db0, ref0, off0 = run_force_control(
-        cy0, cz0, desired_fn=2.0, preload_n=0.08, label='无误差')
+        cy0, cz0, desired_fn=8.0, preload_n=0.08, label='无误差')
 
     print(f"\n[3] 倾斜 {int(TILT)}° 仿真...")
     cy1, cz1 = generate_cylinders(TILT)
     traj1, f1, dn1, db1, ref1, off1 = run_force_control(
-        cy1, cz1, desired_fn=2.0, preload_n=0.08, label=f'倾斜{int(TILT)}°')
+        cy1, cz1, desired_fn=8.0, preload_n=0.08, label=f'倾斜{int(TILT)}°')
 
     print("\n[4] 生成对比图...")
     plot_comparison(ref0, off0, traj0, ref1, off1, traj1,
