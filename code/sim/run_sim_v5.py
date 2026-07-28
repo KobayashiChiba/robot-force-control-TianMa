@@ -31,7 +31,7 @@ DT = 0.005
 def run(cy_std, cz_std, cy_err, cz_err, label, n_steps=3000):
     ctrl = ForceController(cy_std, cz_std)
     L = ctrl.L
-    pos = ctrl._ball_ref(0)
+    pos = ctrl.ball_ref[0]
 
     traj, flog = [], []
     t0 = time.perf_counter()

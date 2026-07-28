@@ -25,7 +25,7 @@ N_STEPS = 3000
 
 def run(cy_std, cz_std, cy_err, cz_err, label):
     ctrl = ForceController(cy_std, cz_std)
-    pos = ctrl._ball_ref(0)
+    pos = ctrl.ball_ref[0]
     traj, flog = [], []
     t0 = time.perf_counter()
     for step in range(N_STEPS):

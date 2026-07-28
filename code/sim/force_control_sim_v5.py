@@ -5,32 +5,24 @@ force_control_sim_v5.py — 力控仿真 V5
   step(F_vec, s_sim, P_cur, dt) → v_3d（世界坐标速度，mm/s）
   主循环: pos += v_3d * dt
 
-改动（V4→V5）:
-  1. step 加 P_cur 参数 → 实时投影偏移
-  2. 内部加 ball_ref → 参考轨迹点 + 切线方向
-  3. Admittance1D → PID1D 追位置误差 (inverse 保留做非线性解耦)
-  4. 切向推动改参考轨迹切线（不再是接触曲线切线）
-  5. 硬限位 + anti-windup
-
-保留:
-  低通滤波 / compute_point_basis_ortho / 真实力 sphere_contact_force
-  速度输出模式 / inverse 解耦 / o 方向暂关
-
-配合 run_sim_v5.py 使用
+核心：
+  1. 最近接触点标架 → 力分解
+  2. 二次 inverse(Fn,Fo) → 逆推偏移
+  3. PID 追逆推归零（力级闭环）
+  4. 软限位: smoothstep 混合力反馈 & 位置弹簧
+  5. 切向恒速推动
 """
-import sys, os, pickle, numpy as np, time
+import sys, os, pickle, numpy as np
 _sdir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_sdir, '..', 'lib_v2'))
 from cylinder_def import CylinderDef
 from cylinder_geometry_v2 import sample_intersection
-from sphere_contact import sphere_contact_force
 from force_mechanics_v2 import compute_point_basis_ortho
-from force_field_fixed import inverse
+from force_field_quadratic import inverse
 
 F_TARGET = -8.0
 DT = 0.005
-LIMIT_N = 2.5
-LIMIT_O = 1.0
+K_POS = 8.0  # 软限位位置弹簧增益
 
 
 class PID1D:
@@ -40,7 +32,6 @@ class PID1D:
         self.integral = 0.0
         self.last_err = 0.0
         self.first = True
-        self.frozen = False
 
     def step(self, err):
         if self.first:
@@ -48,21 +39,12 @@ class PID1D:
             self.last_err = err
             self.first = False
 
-        # anti-windup: 限位激活时冻结积分
-        if not self.frozen:
-            self.integral += err * self.dt
-
+        self.integral += err * self.dt
         d_err = (err - self.last_err) / self.dt
         self.last_err = err
 
         out = self.Kp * err + self.Ki * self.integral + self.Kd * d_err
         return np.clip(out, -160.0, 160.0)
-
-    def reset(self):
-        self.integral = 0.0
-        self.last_err = 0.0
-        self.first = True
-        self.frozen = False
 
 
 class LowPass:
@@ -87,47 +69,31 @@ class ForceController:
         with open(os.path.join(_sdir, '..', 'data', 'force_model.pkl'), 'rb') as f:
             d = pickle.load(f)
         self.ball_ref = d['ball_center_500']   # (N,3)
-        # 弧长参数
         diffs = np.diff(self.ball_ref, axis=0)
-        segs = np.sqrt(np.sum(diffs**2, axis=1))
-        self.arc = np.concatenate([[0.0], np.cumsum(segs)])
-        self.L = self.arc[-1]
+        self.L = np.sum(np.sqrt(np.sum(diffs**2, axis=1)))
 
-        self.pid_n = PID1D()
-        self.pid_o = PID1D(Kp=8.0, Ki=0.05, Kd=0.0, dt=DT)
+        self.pid_n = PID1D(Kp=12.0, Ki=0.15, Kd=0.0, dt=DT)
+        self.pid_o = PID1D(Kp=4.0, Ki=0.025, Kd=0.0, dt=DT)
         self.filt_fn = LowPass()
         self.filt_fo = LowPass()
-
-    def _ball_ref(self, s):
-        """s ∈ [0, 1) → 球刀中心参考点 (线性插值)"""
-        s = s % 1.0
-        target = s * self.L
-        i = np.searchsorted(self.arc, target, side='right') - 1
-        i = max(0, min(i, len(self.ball_ref) - 2))
-        t = (target - self.arc[i]) / max(1e-12, self.arc[i+1] - self.arc[i])
-        t = max(0.0, min(1.0, t))
-        return (1 - t) * self.ball_ref[i] + t * self.ball_ref[i+1]
-
-    def _ref_tangent(self, s):
-        """参考轨迹切线方向 (单位向量)"""
-        ds = 0.001
-        p0 = self._ball_ref(s)
-        p1 = self._ball_ref(s + ds)
-        t = p1 - p0
-        nrm = np.linalg.norm(t)
-        return t / nrm if nrm > 1e-12 else np.array([1.0, 0.0, 0.0])
 
     def _nearest_contact(self, P_cur):
         """找接触曲线上离当前位置最近的点"""
         dists = np.linalg.norm(self.contact_pts - P_cur, axis=1)
         return self.contact_pts[np.argmin(dists)]
 
+    def _nearest_ball_ref(self, P_cur):
+        """找ball_ref上离当前位置最近的参考点"""
+        dists = np.linalg.norm(self.ball_ref - P_cur, axis=1)
+        return self.ball_ref[np.argmin(dists)]
+
     def step(self, F_vec, s_sim, P_cur, total_steps, dt=DT):
-        # 标架：找当前位置在接触曲线上最近的点来计算
+        # 标架：找接触曲线上最近点
         P_ct = self._nearest_contact(P_cur)
         basis = compute_point_basis_ortho(P_ct, self.contact_geom)
         n = basis.normal
         o = basis.ortho
+        t = basis.tangent
 
         # 力分解 + 滤波
         Fn = np.dot(F_vec, n)
@@ -135,44 +101,34 @@ class ForceController:
         Fn_f = self.filt_fn.update(Fn)
         Fo_f = self.filt_fo.update(Fo)
 
-        # 实时偏移（相对参考轨迹）
-        P_ref = self._ball_ref(s_sim)
+        # 最近参考点（球刀在哪，参考点就在哪）
+        P_ref = self._nearest_ball_ref(P_cur)
         dn_actual = np.dot(P_cur - P_ref, n)
         do_actual = np.dot(P_cur - P_ref, o)
 
-        # PID 直接追逆推值——逆推归零时力=目标
-        # dn_actual 用于 db 反推（Fo ∝ dn_actual·db）
-        dn_target, db_target = inverse(Fn_f, Fo_f, dn_actual)
-        vn = self.pid_n.step(dn_target)
-        vb = self.pid_o.step(db_target - do_actual)
+        # 逆推 + 软限位混合
+        # 0~1mm: 纯力反馈; 1~2mm: smoothstep过渡; >2mm: 纯位置弹簧
+        dn_target, db_target = inverse(Fn_f, Fo_f)
 
-        # 切向推动（参考轨迹切线）
-        t_ref = self._ref_tangent(s_sim)
+        def _blend(d_abs, force_err, pos_err):
+            if d_abs < 1.0:
+                w = 0.0
+            elif d_abs > 2.0:
+                w = 1.0
+            else:
+                t_val = (d_abs - 1.0) / 1.0
+                w = t_val * t_val * (3 - 2 * t_val)  # smoothstep
+            return (1 - w) * force_err + w * pos_err
+
+        err_n = _blend(abs(dn_actual), -dn_target, -K_POS * dn_actual)
+        err_o = _blend(abs(do_actual), -db_target, -K_POS * do_actual)
+
+        vn = self.pid_n.step(err_n)
+        vb = self.pid_o.step(err_o)
+
+        # 切向推动
         v_fwd = self.L / (total_steps * dt)
-        vt = v_fwd
-
-        v_raw = vn * n + vb * o + vt * t_ref
-
-        # === 硬限位 ===
-        P_next = P_cur + v_raw * dt
-        d_n = np.dot(P_next - P_ref, n)
-        d_o = np.dot(P_next - P_ref, o)
-
-        if abs(d_n) > LIMIT_N:
-            sign = 1.0 if d_n > 0 else -1.0
-            vn_clamped = (sign * LIMIT_N - np.dot(P_cur - P_ref, n)) / dt
-            v_raw += (vn_clamped - vn) * n
-            self.pid_n.frozen = True
-        else:
-            self.pid_n.frozen = False
-
-        if abs(d_o) > LIMIT_O:
-            sign = 1.0 if d_o > 0 else -1.0
-            vo_clamped = (sign * LIMIT_O - np.dot(P_cur - P_ref, o)) / dt
-            v_raw += (vo_clamped - vb) * o
-            self.pid_o.frozen = True
-        else:
-            self.pid_o.frozen = False
+        v_raw = vn * n + vb * o + v_fwd * t
 
         return v_raw
 

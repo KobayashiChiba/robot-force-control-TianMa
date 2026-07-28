@@ -75,8 +75,8 @@ def compute_frame(
     r_y = _radial_vector(contact_pt, cyl_y)
     r_z = _radial_vector(contact_pt, cyl_z)
 
-    # 切向量：t = r_y × r_z（精确正交于两个圆柱面法向）
-    t = np.cross(r_y, r_z)
+    # 切向量：t = r_z × r_y（精确正交于两个圆柱面法向）
+    t = np.cross(r_z, r_y)
     t = t / np.linalg.norm(t)
 
     # 法向量：加权径向组合 n = w_y·r_y + w_z·r_z
