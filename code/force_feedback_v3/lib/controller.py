@@ -11,16 +11,16 @@ controller.py — V5 力控控制器
     v_3d = ctrl.step(F_vec, P_cur, total_steps, dt)
 """
 import numpy as np
-from force_field_quadratic import inverse
-from force_mechanics_v2 import compute_point_basis_ortho
+from .force_field_quadratic import inverse
+from .force_mechanics import compute_point_basis_ortho
 
 
 # === 默认参数 ===
 F_TARGET = -8.0      # 目标法向力 (N)
 DT = 0.005           # 仿真步长 (s)
 K_POS = 8.0          # 软限位位置弹簧增益
-SOFT_LO = 1.0        # 软限位起始 (mm)
-SOFT_HI = 2.0        # 软限位饱和 (mm)
+SOFT_LO = 2.0        # 软限位起始 (mm)
+SOFT_HI = 3.0        # 软限位饱和 (mm)
 
 
 class PID1D:
@@ -87,7 +87,7 @@ class ForceController:
     """
 
     def __init__(self, ball_ref, L, contact_geom,
-                 kp_n=12.0, ki_n=0.15,
+                 kp_n=25.0, ki_n=0.3,
                  kp_o=4.0, ki_o=0.025,
                  k_pos=K_POS, soft_lo=SOFT_LO, soft_hi=SOFT_HI,
                  filt_a=1.0):

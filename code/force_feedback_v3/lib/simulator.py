@@ -3,12 +3,10 @@ simulator.py — 力控仿真环境
 
 封装接触力 + 摩擦力 + 随机噪声，统一接口，参数可配。
 """
-import sys, os, pickle, numpy as np
-_sdir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_sdir, '..', 'lib_v2'))
-from sphere_contact import sphere_contact_force
-from force_mechanics_v2 import compute_point_basis_ortho
-from cylinder_geometry_v2 import sample_intersection
+import pickle, numpy as np
+from .sphere_contact import sphere_contact_force
+from .force_mechanics import compute_point_basis_ortho
+from .cylinder_geometry import sample_intersection
 
 
 class Simulator:
