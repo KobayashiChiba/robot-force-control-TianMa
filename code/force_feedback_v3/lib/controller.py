@@ -11,7 +11,7 @@ controller.py — V5 力控控制器
     v_3d = ctrl.step(F_vec, P_cur, total_steps, dt)
 """
 import numpy as np
-from .force_field_quadratic import inverse
+from .force_field_physical_v2 import inverse
 from .force_mechanics import compute_point_basis_ortho
 
 

@@ -31,6 +31,16 @@ K3_RD = 1.714   # dn*db 乘积系数
 
 FN_WEAK = 2.0   # 浅接触阈值 (N)，低于此值不反推 db
 FN_ZERO = 0.5   # 零接触阈值 (N)
+DN_SAT = 0.3    # db 平滑过渡半宽 (mm)：dn∈[0,DN_SAT] db 从 0 渐变到反推值
+FO_SAT = 0.3    # Fo 连续过渡半宽 (N)：Fo∈[-FO_SAT,+FO_SAT] 两段系数平滑混合
+
+
+def _db_full(Fo, dn, k1, k3):
+    """深接触 db 完整反推: db = (Fo - K2*dn) / (k1 + k3*dn)"""
+    denom = k1 + k3 * dn
+    if abs(denom) < 1e-6:
+        return 0.0
+    return (Fo - K2_SHARED * dn) / denom
 
 
 def predict(dn, db):
@@ -48,7 +58,7 @@ def predict(dn, db):
 
 
 def inverse(Fn_meas, Fo_meas):
-    """逆推: (Fn,Fo) → (dn,db) — 纯代数解
+    """逆推: (Fn,Fo) → (dn,db) — 纯代数解，全范围连续
 
     Args:
         Fn_meas: 有符号法向力 (N)，负值=压入
@@ -56,35 +66,43 @@ def inverse(Fn_meas, Fo_meas):
 
     Returns:
         (dn, db) 偏移量 (mm)
+
+    连续性保证（fix3，2026-08-04）:
+        - 零接触不再截断：|Fn|→0 时 dn→(0-8)/9.917=-0.807，与 -0.756 连续
+        - db 平滑：dn∈[0,DN_SAT] 时 db 从 0 渐变到反推值（smoothstep）
+        - Fo 连续：Fo∈[-FO_SAT,+FO_SAT] 时右上/右下两段系数平滑混合
     """
     fa = abs(Fn_meas)
 
-    # 零接触：无意义反推
-    if fa < FN_ZERO:
-        return 0.0, 0.0
-
-    # dn = (|Fn| - c) / k  (纯线性反推)
+    # dn 全范围连续（力不足时负 dn 让控制器推入）
     dn = (fa - C_FN) / K_FN
-    if dn <= 0:
-        return 0.0, 0.0
 
-    # 浅接触：只反推 dn，不反推 db
-    if fa < FN_WEAK:
+    # 力不足（|Fn| < 8N）或浅接触：保留负 dn 推入，不反推 db
+    if dn <= 0 or fa < FN_WEAK:
         return dn, 0.0
 
     # 深接触：Fo = k1*db + k2*dn + k3*dn*db = db*(k1 + k3*dn) + k2*dn
     # → db = (Fo - k2*dn) / (k1 + k3*dn)
-    if Fo_meas > 0:
+    # Fo 在 [-FO_SAT, +FO_SAT] 内平滑混合右上/右下系数，保证 Fo=0 连续
+    if Fo_meas > FO_SAT:
         k1, k3 = K1_RU, K3_RU
-    elif Fo_meas < 0:
+    elif Fo_meas < -FO_SAT:
         k1, k3 = K1_RD, K3_RD
     else:
-        return dn, 0.0
+        t = (Fo_meas + FO_SAT) / (2 * FO_SAT)
+        w = t * t * (3 - 2 * t)
+        db_ru = _db_full(Fo_meas, dn, K1_RU, K3_RU)
+        db_rd = _db_full(Fo_meas, dn, K1_RD, K3_RD)
+        db = (1 - w) * db_rd + w * db_ru
+        return dn, db
 
-    denom = k1 + k3 * dn
-    if abs(denom) < 1e-6:
-        return dn, 0.0
-    db = (Fo_meas - K2_SHARED * dn) / denom
+    db = _db_full(Fo_meas, dn, k1, k3)
+
+    # dn 浅深过渡：db 从 0 渐变到完整反推值（避免 8N 边界突跳）
+    if dn < DN_SAT:
+        t = dn / DN_SAT
+        w = t * t * (3 - 2 * t)
+        db = w * db
     return dn, db
 
 

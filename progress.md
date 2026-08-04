@@ -441,3 +441,58 @@ code/
 ### 脚本
 - `code/sim/run_sim_v5_batch.py` — 批量误差测试（11组）
 - `code/sim/run_sim_v5_rand.py` — 随机误差 3D 图（10组，含标准/误差接触曲线+球刀参考）
+
+---
+
+## 2026-08-04：physical_v2 逆推模型修复 + 生产对接准备
+
+### 背景
+- 从 `_archive/` 找回 `force_field_physical_v2.py`（物理分块逆推 V2，2026-07-29 拟合，K_C=6.5192 锚定）
+- 放回 `lib/`，controller 切换测试（`from .force_field_physical_v2 import inverse`）
+- 目的是为生产对接方案 B（仿真估计+实机微调）验证：方案 B 初始算式系数 = physical_v2 系数
+
+### 🔴 发现截断 Bug（dn<=0 返回 0,0）
+- 症状：有误差 seed42 Fn 掉到 **-4.15±3.22N**，力控失效
+- 根因：`inverse()` 里 `dn = (|Fn|-8)/9.917`，力不足 8N 时 dn 为负，被 `if dn <= 0: return 0.0,0.0` 截断 → 控制器 err_n=0 → PID 不动 → 球刀停在弱力区
+- 对比 quadratic 无此截断：力不足时返回负 dn → err_n 正 → 推入
+- 与 7/29 文档"有误差均值 3-6N、弱力步>50%"吻合——根因就是截断
+
+### ✅ 修复
+- 去掉截断，力不足时保留负 dn 让控制器推入（浅接触不反推 db）
+
+### 🔴 逆推不连续分析（抖动来源）
+修复后 Fn=-8.02±0.56N，但 limit>1mm 70 次。三个跳变点：
+1. 零接触边界 |Fn|=0.5N：dn 从 -0.756 突跳到 0
+2. 8N 边界 dn=0：db 从 0 突跳到 ±0.7
+3. Fo=0 系数切换：右上/右下段 k1/k3 不同 → db 跳变
+
+### ✅ fix3 方案定型（小林确认保留）
+三个修复方向对比（`script/run_sim_physical_v2_variants.py`）：
+| 版本 | Fn | std |
+|------|-----|-----|
+| 基线（去截断） | -8.02 | ±0.57 |
+| fix1 零接触去截断 | -8.02 | ±0.54 |
+| fix2 +db 平滑 | -8.01 | ±0.54 |
+| fix3 +Fo 连续 | -8.00 | ±0.52 |
+
+fix3 = 零接触连续 + dn∈[0,DN_SAT] db smoothstep + Fo∈[-FO_SAT,+FO_SAT] 系数平滑混合（DN_SAT=0.3, FO_SAT=0.3）
+- 完整有误差仿真：Fn=-8.01±0.54N，limit>1mm 8 次
+- 已写入 `lib/force_field_physical_v2.py`（2026-08-04 fix3 注释标注）
+- 自测往返：dn median=0.215mm，db median=0.414mm
+
+### ⚠️ Simulator 随机性
+- `Simulator` 默认 `seed=None` → 每次跑噪声不同 → limit>1mm 统计不可复现（同代码跑出 8/63/132）
+- Fn 均值/方差稳定（-8.01±0.53~0.56）→ 力控收敛真实可靠
+- 小林决定：不管，看图判断效果
+
+### 📊 力场对比图（output_V2/）
+- `script/plot_fit_v2_vs_real.py` → `output_V2/fit_v2_vs_real.png`
+- 左1列 = physical_v2 predict 简化公式拟合热力图（|F|/Fn/Fo）
+- 右6列 = 真实 sphere_contact_force 实测热力图 + 截面叠加（p=0~0.25）
+
+### ⚠️ 当前状态提醒
+- `lib/controller.py` import 已切到 `force_field_physical_v2`（原 quadratic 保留在 lib 可切回）
+- 新脚本 `run_sim_physical_v2_variants.py`、`plot_fit_v2_vs_real.py` 待小林确认后再正式归档
+- `output_V2/` 新目录（与 output/ 平级）
+- git 有未提交改动：lib/controller.py、lib/force_field_physical_v2.py、新增 script 2个、output_V2/
+- 工具脚本 feishu_send_tool.py 从 projects.zip 恢复到 hermes/scripts/（之前清理项目时误删）
